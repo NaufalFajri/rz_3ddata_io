@@ -52,14 +52,29 @@ def decode_normal(v):
 	return v / 127.0
 	
 def read_draw_command(fdata, offset):
+	start = offset
+
+	raw = fdata[offset:offset + 16]
+
 	material_flags = fdata[offset]
 	opcode = fdata[offset + 1]
 	offset += 2
 
 	texture_index, vertex_draw_count, strip_count = struct.unpack_from("<HHH", fdata, offset)
 	offset += 6
-	
-	offset += 8 # padding
+
+	offset += 8  # padding
+
+	log_read(
+		"CMD",
+		start,
+		raw,
+		f"Flags=0x{material_flags:02X} "
+		f"Opcode=0x{opcode:02X} "
+		f"Tex={texture_index} "
+		f"Verts={vertex_draw_count} "
+		f"Strips={strip_count}"
+	)
 
 	# Extra data from flags
 	if material_flags & 0x04:
