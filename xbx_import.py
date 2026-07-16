@@ -1,66 +1,110 @@
 import bpy
 import struct
+import os
+import math
+# =====================================
+# DEBUG HEX LOGGERZ
+# =====================================
+
+DEBUG_LOG = False
+LOG_FILE_PATH = r"d:\saved\cockracinglog.txt"
+
+def log_read(name, offset, raw, value):
+	if DEBUG_LOG:
+		# Ensure the directory exists
+		log_dir = os.path.dirname(LOG_FILE_PATH)
+		if log_dir and not os.path.exists(log_dir):
+			os.makedirs(log_dir)
+
+		hex_bytes = " ".join(f"{b:02X}" for b in raw)
+		message = (
+			f"{name:<8} "
+			f"OFF 0x{offset:08X} ({offset}) "
+			f"HEX [{hex_bytes}] "
+			f"VAL {value}\n"
+		)
+		
+		# Append to the text file
+		with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+			f.write(message)
+			
+		# Optional: Keep printing to Blender console as well for live viewing
+		print(message.strip())
 
 # =====================================
 # HELPERS
 # =====================================
 
+def normalize(v):
+	x, y, z = v
+	length = math.sqrt(x*x + y*y + z*z)
+
+	if length == 0:
+		return (0.0, 0.0, 0.0)
+
+	return (
+		x / length,
+		y / length,
+		z / length
+	)
+
+def decode_normal(v):
+	return v / 127.0
+	
 def read_draw_command(fdata, offset):
-    material_flags = fdata[offset]
-    opcode = fdata[offset + 1]
-    offset += 2
+	material_flags = fdata[offset]
+	opcode = fdata[offset + 1]
+	offset += 2
 
-    texture_index, vertex_draw_count, strip_count = struct.unpack_from("<HHH", fdata, offset)
-    offset += 6
-    
-    offset += 8 # padding
+	texture_index, vertex_draw_count, strip_count = struct.unpack_from("<HHH", fdata, offset)
+	offset += 6
+	
+	offset += 8 # padding
 
-    # Extra data from flags
-    if material_flags & 0x04:
-        offset += 4
-    if material_flags & 0x08:
-        offset += 4
-    if material_flags & 0x10:
-        offset += 4
-    if material_flags & 0x40:
-        offset += 4
-    if texture_index == 65535:
-        offset += 4
+	# Extra data from flags
+	if material_flags & 0x04:
+		offset += 4
+	if material_flags & 0x08:
+		offset += 4
+	if material_flags & 0x10:
+		offset += 4
+	if material_flags & 0x40:
+		offset += 4
+	if texture_index == 65535:
+		offset += 4
 
-    return {
-        "flags": material_flags,
-        "opcode": opcode,
-        "texture": texture_index,
-        "vertex_count": vertex_draw_count,
-        "strip_count": strip_count,
-    }, offset
+	return {
+		"flags": material_flags,
+		"opcode": opcode,
+		"texture": texture_index,
+		"vertex_count": vertex_draw_count,
+		"strip_count": strip_count,
+	}, offset
 
 
 def create_mesh(name, positions, normals, uvs, faces, obj_index):
-    mesh = bpy.data.meshes.new(name + "_Mesh")
-    mesh.from_pydata(positions, [], faces)
-    mesh.update()
+	mesh = bpy.data.meshes.new(name + "_Mesh")
+	mesh.from_pydata(positions, [], faces)
+	mesh.update()
 
-    obj = bpy.data.objects.new(name, mesh)
-    bpy.context.collection.objects.link(obj)
+	obj = bpy.data.objects.new(name, mesh)
+	bpy.context.collection.objects.link(obj)
 
-    #mesh.create_normals_split()
-    mesh.normals_split_custom_set_from_vertices(normals)
+	#mesh.create_normals_split()
+	if len(normals) == len(mesh.vertices):
+		mesh.use_auto_smooth = True
+		mesh.normals_split_custom_set_from_vertices(normals)
 
-    uv_layer = mesh.uv_layers.new(name="UVMap")
+	mesh.update()
+	uv_layer = mesh.uv_layers.new(name="UVMap")
 
-    for poly in mesh.polygons:
-        for loop_index in poly.loop_indices:
-            vertex_index = mesh.loops[loop_index].vertex_index
-            uv_layer.data[loop_index].uv = uvs[vertex_index]
+	for poly in mesh.polygons:
+		for loop_index in poly.loop_indices:
+			vertex_index = mesh.loops[loop_index].vertex_index
+			uv_layer.data[loop_index].uv = uvs[vertex_index]
 
-    obj.target_index = obj_index
-    #mesh.use_auto_smooth = True
-
-
-			
-
-
+	obj.target_index = obj_index
+	#mesh.use_auto_smooth = True
 			
 def run_import(vertex_file, face_file, merge_per_object):
 	# =====================================
@@ -136,16 +180,56 @@ def run_import(vertex_file, face_file, merge_per_object):
 		offset = vertex_offset
 
 		positions = []
+
 		for i in range(vertex_count):
+			start = offset
+
+			raw = vdata[offset:offset+12]
+
 			x, y, z = struct.unpack_from("<fff", vdata, offset)
-			positions.append((x, y, z))
+
+			log_read(
+				f"POS[{i}]",
+				start,
+				raw,
+				f"X={x} Y={y} Z={z}"
+			)
+
+			positions.append((x, -z, y))
 			offset += 12
 
 		normals = []
+
 		for i in range(vertex_count):
+			start = offset
+
+			raw = vdata[offset:offset+4]
+
 			nx, ny, nz, pad = struct.unpack_from("<bbbB", vdata, offset)
+			# NY NX NZ is correct but direction is wrong
+			# NZ NY NX also correct? but direction is wrong too
+			if nx == -128 or ny == -128 or nz == -128:
+				print(
+					"NORMAL -128 FOUND",
+					nx, ny, nz,
+				"offset", hex(offset)
+				)
+				raise ValueError("Invalid normal value -128")
+			normal = normalize((
+				decode_normal(nx),
+				decode_normal(-nz),
+				decode_normal(ny)
+			))
+
+			log_read(
+				f"NORM[{i}]",
+				start,
+				raw,
+				f"RAW({nx},{ny},{nz},{pad}) -> {normal}"
+			)
+
+			normals.append(normal)
 			offset += 4
-			normals.append((nx / 128.0, nz / 128.0, ny / 128.0))
 
 		uvs = []
 		if texture_index == 0xFFFF:
@@ -153,9 +237,26 @@ def run_import(vertex_file, face_file, merge_per_object):
 				uvs.append((0.0, 0.0))
 		else:
 			for i in range(vertex_count):
+				start = offset
+
+				raw = vdata[offset:offset+4]
+
 				u, v = struct.unpack_from("<HH", vdata, offset)
+
+				uv = (
+					u / 2048.0,
+					1.0 - (v / 2048.0)
+				)
+
+				log_read(
+					f"UV[{i}]",
+					start,
+					raw,
+					f"RAW({u},{v}) -> {uv}"
+				)
+
 				offset += 4
-				uvs.append((u / 2048.0, 1.0 - (v / 2048.0)))
+				uvs.append(uv)
 
 		# Per-vertex extra data (flag 0x40)
 		if cmd["flags"] & (1 << 6):
