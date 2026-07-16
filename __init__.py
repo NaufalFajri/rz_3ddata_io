@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "XBX Format",
-    "author": "voliver9",
+    "name": "3DDATA Import",
+    "author": "voliver9, tatara_hisoka",
     "version": (1, 0, 2),
     "blender": (3, 6, 0),
     "location": "File > Import-Export",
-    "description": "Import and export decompressed 3dobjs.XBX and 3dobjsp.XBX files",
+    "description": "Import 3DDATA files",
     "category": "Import-Export",
 }
 
@@ -14,6 +14,9 @@ from bpy.props import IntProperty, StringProperty, PointerProperty, BoolProperty
 from bpy_extras.io_utils import ImportHelper, ExportHelper
 import tempfile
 import os
+import struct
+import zlib
+import subprocess
 from . import xbx_export
 from . import xbx_import
 from . import xbx_obj_replace
@@ -92,24 +95,39 @@ class ENGINE_PT_material_panel(Panel):
 # ----------------------------
 # IMPORT OPERATOR
 # ----------------------------
+def decompress_xbx(input_path, output_path=None):
+    with open(input_path, "rb") as f:
+        raw_size = struct.unpack("<I", f.read(4))[0]
+        compressed = f.read()
 
-class ImportGameMesh(bpy.types.Operator, ImportHelper):
+    data = zlib.decompress(compressed)
+
+    if len(data) != raw_size:
+        raise ValueError(
+            f"Size mismatch: expected {raw_size}, got {len(data)}"
+        )
+
+    if output_path is None:
+        folder, name = os.path.split(input_path)
+        output_path = os.path.join(folder, "TMP_" + name)
+        
+    with open(output_path, "wb") as f:
+        f.write(data)
+
+    return output_path
+    
+class ImportGameMesh(Operator):
     bl_idname = "import_scene.game_mesh"
-    bl_label = "Import XBX (Decompressed)"
-
-    filename_ext = ".dat"
-    filter_glob: bpy.props.StringProperty(
-        default="*.dat",
-        options={'HIDDEN'}
-    )
-
-    files: bpy.props.CollectionProperty(
-        type=bpy.types.OperatorFileListElement
-    )
+    bl_label = "Import 3DDATA"
 
     directory: bpy.props.StringProperty(
+        name="Game Folder",
         subtype='DIR_PATH'
     )
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
 
     merge_submeshes: bpy.props.BoolProperty(
         name="Merge Submeshes",
@@ -121,27 +139,26 @@ class ImportGameMesh(bpy.types.Operator, ImportHelper):
         layout.prop(self, "merge_submeshes")
 
     def execute(self, context):
+        objdb_path   = os.path.join(self.directory, "3dobjdb.BIN")
+        obj_path     = os.path.join(self.directory, "3dobjs.XBX")
+        objsp_path   = os.path.join(self.directory, "3dobjsp.XBX")
+        bininfo_path = os.path.join(self.directory, "bininfo.BIN")
 
-        if len(self.files) != 2:
-            self.report({'ERROR'}, "Select exactly two .dat files (vertex and face)")
-            return {'CANCELLED'}
+        required = (
+            objdb_path,
+            obj_path,
+            objsp_path,
+            bininfo_path,
+        )
 
-        paths = [os.path.join(self.directory, f.name) for f in self.files]
+        for path in required:
+            if not os.path.isfile(path):
+                self.report({'ERROR'}, f"Missing file: {os.path.basename(path)}")
+                return {'CANCELLED'}
 
-        # Optional: auto-detect which is which
-        vertex_path = None
-        face_path = None
-
-        for p in paths:
-            if p.lower().endswith("_v.dat"):
-                vertex_path = p
-            elif p.lower().endswith("_f.dat"):
-                face_path = p
-
-        # fallback if no naming convention
-        if not vertex_path or not face_path:
-            vertex_path, face_path = paths
-
+        face_path = decompress_xbx(obj_path)
+        vertex_path = decompress_xbx(objsp_path)
+        
         try:
             xbx_import.run_import(
                 vertex_path,
@@ -163,8 +180,6 @@ class ImportGameMesh(bpy.types.Operator, ImportHelper):
 class ExportGameMeshStandalone(Operator, ExportHelper):
     bl_idname = "export_scene.game_mesh"
     bl_label = "Export XBX (Standalone decompressed)"
-    filename_ext = ".dat"
-    filter_glob: StringProperty(default="*.dat", options={'HIDDEN'})
 
     def execute(self, context):
 
@@ -234,10 +249,6 @@ class ExportGameMeshInto(Operator, ImportHelper):
     bl_idname = "export_scene.game_mesh_into"
     bl_label = "Export XBX (Into Existing Scene)"
 
-    filename_ext = ".dat"
-    filter_glob: StringProperty(default="*.dat", options={'HIDDEN'})
-
-    files: bpy.props.CollectionProperty(type=bpy.types.OperatorFileListElement)
     directory: bpy.props.StringProperty(subtype='DIR_PATH')
 
     def execute(self, context):
@@ -339,7 +350,7 @@ class ExportGameMeshInto(Operator, ImportHelper):
 # MENUS
 # ----------------------------
 def menu_func_import(self, context):
-    self.layout.operator(ImportGameMesh.bl_idname, text="Decompressed XBX")
+    self.layout.operator(ImportGameMesh.bl_idname, text="Ford Racing Model (3DDATA)")
 
 def menu_func_export(self, context):
     self.layout.operator(ExportGameMeshStandalone.bl_idname, text="Decompressed XBX")
