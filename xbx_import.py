@@ -286,10 +286,37 @@ def run_import(vertex_file, face_file, merge_per_object):
 		faces = []
 
 		for s in range(strip_count):
+
+			start = strips_offset
+			raw = fdata[strips_offset:strips_offset + 2]
+
 			strip_length = struct.unpack_from("<H", fdata, strips_offset)[0]
+
+			log_read(
+				f"STRIP[{s}]",
+				start,
+				raw,
+				f"Length={strip_length}"
+			)
+
 			strips_offset += 2
 
-			strip_indices = struct.unpack_from(f"<{strip_length}H", fdata, strips_offset)
+			start = strips_offset
+			raw = fdata[strips_offset:strips_offset + strip_length * 2]
+
+			strip_indices = struct.unpack_from(
+				f"<{strip_length}H",
+				fdata,
+				strips_offset
+			)
+
+			log_read(
+				f"INDEX[{s}]",
+				start,
+				raw,
+				strip_indices
+			)
+
 			strips_offset += strip_length * 2
 
 			for i in range(strip_length - 2):
@@ -298,10 +325,20 @@ def run_import(vertex_file, face_file, merge_per_object):
 				c = strip_indices[i + 2]
 
 				if a != b and b != c and a != c:
+
 					if i % 2 == 0:
-						faces.append((a, b, c))
+						face = (a, b, c)
 					else:
-						faces.append((b, a, c))
+						face = (b, a, c)
+
+					faces.append(face)
+
+					log_read(
+						f"FACE[{s}]",
+						start,
+						b"",
+						f"{i}: {face}"
+					)
 
 		# =====================================
 		# MERGE OR CREATE
